@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>KYRO Online Tetris</title>
+    <!-- Firebase App y Database SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
+
+    <style>
+        :root {
+            --kyro-blue: #1b1191;
+            --kyro-lime: #d4f043;
+            --kyro-dark: #0f0a4d;
+            --kyro-white: #ffffff;
+        }
+
+        * { touch-action: manipulation; box-sizing: border-box; }
+        body, html { 
+            margin: 0; padding: 0; width: 100%; height: 100%; 
+            background: var(--kyro-blue); color: var(--kyro-white);
+            font-family: 'Arial Black', sans-serif; overflow: hidden;
+        }
+
+        /* VISTAS */
+        .screen {
+            position: absolute; width: 100%; height: 100%;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            padding: 20px; text-align: center;
+        }
+
+        #menu-screen { z-index: 10; background: var(--kyro-blue); }
+        #game-screen { display: none; background: var(--kyro-dark); }
+
+        .logo { font-size: 3rem; color: var(--kyro-lime); margin-bottom: 2rem; }
+        .logo span { color: white; }
+
+        input {
+            padding: 12px; font-size: 1.2rem; border-radius: 8px; border: none;
+            margin-bottom: 10px; width: 200px; text-align: center;
+        }
+
+        button {
+            padding: 15px 30px; font-size: 1rem; font-weight: bold;
+            text-transform: uppercase; border: none; border-radius: 8px;
+            cursor: pointer; margin: 5px; transition: 0.2s;
+        }
+
+        .btn-primary { background: var(--kyro-lime); color: var(--kyro-blue); width: 220px; }
+        .btn-secondary { background: transparent; border: 2px solid white; color: white; width: 220px; }
+
+        /* JUEGO */
+        #game-layout {
+            display: flex; width: 100%; height: 80%; justify-content: space-around; align-items: flex-start;
+        }
+
+        .canvas-container { position: relative; }
+        canvas { 
+            background: rgba(0,0,0,0.5); border: 2px solid var(--kyro-lime); 
+            height: 50vh; width: auto; 
+        }
+        
+        .opponent-preview { transform: scale(0.6); opacity: 0.7; }
+
+        .label { font-size: 0.8rem; color: var(--kyro-lime); margin-bottom: 5px; }
+
+        /* CONTROLES MÓVILES */
+        #controls {
+            display: grid; grid-template-columns: repeat(3, 1fr);
+            gap: 10px; width: 100%; max-width: 300px; margin-top: 10px;
+        }
+        .ctrl-btn {
+            background: rgba(255,255,255,0.1); border: 1px solid white;
+            color: white; padding: 20px; border-radius: 50%; font-size: 1.5rem;
+        }
+        .ctrl-btn:active { background: var(--kyro-lime); color: var(--kyro-blue); }
+
+        .game-info { position: absolute; top: 10px; width: 100%; display: flex; justify-content: space-between; padding: 0 20px; }
+
+        #exit-btn { position: absolute; top: 10px; right: 10px; z-index: 100; padding: 8px; font-size: 0.7rem; }
+    </style>
+</head>
+<body>
+
+    <!-- Pantalla de Inicio -->
+    <div id="menu-screen" class="screen">
+        <div class="logo">KY<span>RO</span></div>
+        <p>A INTERNET QUE MOVE VOCÊ</p>
+        <button class="btn-primary" onclick="createGame()">Crear Partida</button>
+        <div style="margin: 20px 0;">
+            <input type="text" id="game-id-input" placeholder="Código de sala">
+            <button class="btn-secondary" onclick="joinGame()">Unirse</button>
+        </div>
+        <button class="btn-secondary" style="width: 100px;" onclick="location.reload()">Salir</button>
+    </div>
+
+    <!-- Pantalla de Juego -->
+    <div id="game-screen" class="screen">
+        <button id="exit-btn" class="btn-secondary" onclick="location.reload()">SALIR</button>
+        <div class="game-info">
+            <div id="room-display">SALA: ----</div>
+            <div id="score-display">Puntos: 0</div>
+        </div>
+
+        <div id="game-layout">
+            <div class="canvas-container">
+                <div class="label">TÚ</div>
+                <canvas id="p1-canvas" width="240" height="400"></canvas>
+            </div>
+            <div class="canvas-container opponent-preview">
+                <div class="label">RIVAL</div>
+                <canvas id="p2-canvas" width="240" height="400"></canvas>
+            </div>
+        </div>
+
+        <!-- Botones táctiles -->
+        <div id="controls">
+            <div></div><button class="ctrl-btn" onclick="pMove('up')">↻</button><div></div>
+            <button class="ctrl-btn" onclick="pMove('left')">←</button>
+            <button class="ctrl-btn" onclick="pMove('down')">↓</button>
+            <button class="ctrl-btn" onclick="pMove('right')">→</button>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. CONFIGURACIÓN FIREBASE (REEMPLAZA CON TUS DATOS) ---
+        const firebaseConfig = {
+            apiKey: "TU_API_KEY",
+            authDomain: "TU_PROYECTO.firebaseapp.com",
+            databaseURL: "https://TU_PROYECTO.firebaseio.com",
+            projectId: "TU_PROYECTO",
+            storageBucket: "TU_PROYECTO.appspot.com",
+            messagingSenderId: "ID",
+            appId: "APP_ID"
+        };
+
+        // Inicializar Firebase solo si la config existe
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        // --- 2. VARIABLES DE ESTADO ---
+        let gameId = "";
+        let playerRole = ""; // 'p1' o 'p2'
+        let opponentRole = "";
+        const canvas = document.getElementById('p1-canvas');
+        const ctx = canvas.getContext('2d');
+        const oppCanvas = document.getElementById('p2-canvas');
+        const oppCtx = oppCanvas.getContext('2d');
+
+        ctx.scale(20, 20);
+        oppCtx.scale(20, 20);
+
+        const arena = createMatrix(12, 20);
+        const player = {
+            pos: {x: 0, y: 0},
+            matrix: null,
+            score: 0
+        };
+
+        // --- 3. LÓGICA DEL TETRIS ---
+        function createPiece(type) {
+            if (type === 'I') return [[0,1,0,0],[0,1,0,0],[0,1,0,0],[0,1,0,0]];
+            if (type === 'L') return [[0,2,0],[0,2,0],[0,2,2]];
+            if (type === 'O') return [[3,3],[3,3]];
+            if (type === 'T') return [[0,4,0],[4,4,4],[0,0,0]];
+            if (type === 'S') return [[0,5,5],[5,5,0],[0,0,0]];
+            return [[6,6,0],[0,6,6],[0,0,0]];
+        }
+
+        function createMatrix(w, h) {
+            const matrix = [];
+            while (h--) matrix.push(new Array(w).fill(0));
+            return matrix;
+        }
+
+        function drawMatrix(matrix, offset, context, isOpponent = false) {
+            matrix.forEach((row, y) => {
+                row.forEach((value, x) => {
+                    if (value !== 0) {
+                        context.fillStyle = isOpponent ? '#ffffff' : '#d4f043';
+                        context.fillRect(x + offset.x, y + offset.y, 1, 1);
+                    }
+                });
+            });
+        }
+
+        function collide(arena, player) {
+            const [m, o] = [player.matrix, player.pos];
+            for (let y = 0; y < m.length; ++y) {
+                for (let x = 0; x < m[y].length; ++x) {
+                    if (m[y][x] !== 0 && (arena[y + o.y] && arena[y + o.y][x + o.x]) !== 0) return true;
+                }
+            }
+            return false;
+        }
+
+        function merge(arena, player) {
+            player.matrix.forEach((row, y) => {
+                row.forEach((value, x) => {
+                    if (value !== 0) arena[y + player.pos.y][x + player.pos.x] = value;
+                });
+            });
+        }
+
+        function rotate(matrix) {
+            for (let y = 0; y < matrix.length; ++y) {
+                for (let x = 0; x < y; ++x) [matrix[x][y], matrix[y][x]] = [matrix[y][x], matrix[x][y]];
+            }
+            matrix.forEach(row => row.reverse());
+        }
+
+        function playerReset() {
+            const pieces = 'ILOTS';
+            player.matrix = createPiece(pieces[pieces.length * Math.random() | 0]);
+            player.pos.y = 0;
+            player.pos.x = (arena[0].length / 2 | 0) - (player.matrix[0].length / 2 | 0);
+            if (collide(arena, player)) {
+                db.ref(`games/${gameId}/winner`).set(opponentRole);
+                alert("¡GAME OVER!");
+                location.reload();
+            }
+        }
+
+        function update(time = 0) {
+            draw();
+            requestAnimationFrame(update);
+        }
+
+        function draw() {
+            ctx.fillStyle = '#0f0a4d';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            drawMatrix(arena, {x: 0, y: 0}, ctx);
+            drawMatrix(player.matrix, player.pos, ctx);
+        }
+
+        // --- 4. SINCRONIZACIÓN FIREBASE ---
+        function syncToFirebase() {
+            if (!gameId) return;
+            db.ref(`games/${gameId}/${playerRole}`).set({
+                arena: arena,
+                score: player.score,
+                pos: player.pos,
+                matrix: player.matrix
+            });
+        }
+
+        function listenToOpponent() {
+            db.ref(`games/${gameId}/${opponentRole}`).on('value', snapshot => {
+                const data = snapshot.val();
+                if (data) {
+                    oppCtx.fillStyle = '#0f0a4d';
+                    oppCtx.fillRect(0, 0, oppCanvas.width, oppCanvas.height);
+                    drawMatrix(data.arena, {x: 0, y: 0}, oppCtx, true);
+                    if(data.matrix) drawMatrix(data.matrix, data.pos, oppCtx, true);
+                }
+            });
+            
+            db.ref(`games/${gameId}/winner`).on('value', snapshot => {
+                if (snapshot.val() === playerRole) {
+                    alert("¡ERES EL GANADOR!");
+                    location.reload();
+                }
+            });
+        }
+
+        // --- 5. ACCIONES DE USUARIO ---
+        function createGame() {
+            gameId = Math.random().toString(36).substring(2, 6).toUpperCase();
+            playerRole = 'p1';
+            opponentRole = 'p2';
+            db.ref(`games/${gameId}`).set({ status: 'waiting', winner: '' });
+            initGameUI();
+        }
+
+        function joinGame() {
+            gameId = document.getElementById('game-id-input').value.toUpperCase();
+            if (!gameId) return alert("Introduce un código");
+            playerRole = 'p2';
+            opponentRole = 'p1';
+            initGameUI();
+        }
+
+        function initGameUI() {
+            document.getElementById('menu-screen').style.display = 'none';
+            document.getElementById('game-screen').style.display = 'flex';
+            document.getElementById('room-display').innerText = "SALA: " + gameId;
+            playerReset();
+            listenToOpponent();
+            update();
+            setInterval(syncToFirebase, 200); // Sincroniza cada 200ms
+            
+            // Gravedad automática
+            setInterval(() => {
+                pMove('down');
+            }, 1000);
+        }
+
+        function pMove(dir) {
+            if (dir === 'left') {
+                player.pos.x--;
+                if (collide(arena, player)) player.pos.x++;
+            } else if (dir === 'right') {
+                player.pos.x++;
+                if (collide(arena, player)) player.pos.x--;
+            } else if (dir === 'down') {
+                player.pos.y++;
+                if (collide(arena, player)) {
+                    player.pos.y--;
+                    merge(arena, player);
+                    playerReset();
+                    // Limpiar líneas
+                    outer: for (let y = arena.length - 1; y > 0; --y) {
+                        for (let x = 0; x < arena[y].length; ++x) {
+                            if (arena[y][x] === 0) continue outer;
+                        }
+                        const row = arena.splice(y, 1)[0].fill(0);
+                        arena.unshift(row);
+                        player.score += 10;
+                        document.getElementById('score-display').innerText = "Puntos: " + player.score;
+                        y++;
+                    }
+                }
+            } else if (dir === 'up') {
+                const pos = player.pos.x;
+                let offset = 1;
+                rotate(player.matrix);
+                while (collide(arena, player)) {
+                    player.pos.x += offset;
+                    offset = -(offset + (offset > 0 ? 1 : -1));
+                    if (offset > player.matrix[0].length) {
+                        rotate(player.matrix); // Deshacer
+                        player.pos.x = pos;
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Teclado físico también compatible
+        document.addEventListener('keydown', e => {
+            if (e.keyCode === 37) pMove('left');
+            if (e.keyCode === 39) pMove('right');
+            if (e.keyCode === 40) pMove('down');
+            if (e.keyCode === 38) pMove('up');
+        });
+
+    </script>
+</body>
+</html>
